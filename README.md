@@ -174,9 +174,9 @@ Ve a tu repositorio → **Settings → Secrets and variables → Actions → New
 
 | Nombre | Valor |
 |--------|-------|
-| `GCP_PROJECT_ID` | `cicdtraining-498421` |
-| `WIF_PROVIDER` | `projects/622078306811/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
-| `WIF_SERVICE_ACCOUNT` | `github-actions-sa@cicdtraining-498421.iam.gserviceaccount.com` |
+| `GCP_PROJECT_ID` | `my-demo-506722` |
+| `WIF_PROVIDER` | `projects/1011707551443/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
+| `WIF_SERVICE_ACCOUNT` | `github-actions-sa@my-demo-506722.iam.gserviceaccount.com` |
 
 ---
 

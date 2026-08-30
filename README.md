@@ -170,7 +170,7 @@ projects/622078306811/locations/global/workloadIdentityPools/github-pool/provide
 
 ## Paso 6 — Secretos en GitHub
 
-Ve a tu repositorio → ***Settings → Secrets and variables → Actions → New repository secret** y agrega:
+Ve a tu repositorio → ***Settings → Secrets and variables → Actions → New repository secret** y  agrega:
 
 | Nombre | Valor |
 |--------|-------|

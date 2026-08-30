@@ -13,5 +13,11 @@ pipeline {
                 bat 'docker --version'
             }
         }
+
+        stage('Test Google Cloud') {
+            steps {
+                bat 'gcloud --version'
+            }
+        }
     }
 }

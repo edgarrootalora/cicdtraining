@@ -220,6 +220,8 @@ gsutil 5.37
 [Pipeline] End of Pipeline
 Finished: SUCCESS
 ```
+  
+---
 
 ### C. 🟢 Implementación de SonarQube Cloud
 Se integró SonarQube Cloud al pipeline de GitHub Actions con el objetivo de analizar automáticamente la calidad y seguridad del código fuente cada vez que se realiza un push sobre la rama main.

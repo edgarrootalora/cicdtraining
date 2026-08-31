@@ -36,7 +36,7 @@ Jenkins (Jenkinsfile)
       ├─ Test Jenkins
       ├─ Test Docker
       └─ Test Google Cloud
-
+```
 ---
 
 ## 2. Stack:
@@ -155,6 +155,7 @@ Jenkins se configuró como un pipeline adicional para demostrar la ejecución au
 * **Resultado:** Se evidencia que el resultado es exitoso. 
 <img width="1877" height="513" alt="image" src="https://github.com/user-attachments/assets/c855ee6d-b70c-4b0d-99a8-cf9d208ebfa5" />
 * **Consola:**
+
 ```Consola de Jenkins
 Lanzada por el usuario Edgar Andres Romero Otalora
 Obtained Jenkinsfile from git https://github.com/edgarrootalora/cicdtraining.git

@@ -1,27 +1,15 @@
-# 🚀 CI/CD con GitHub Actions y Google Cloud Run
+# 🚀 Pipeline completo integrando prácticas de seguridad y monitoreo
 
 Pipeline de despliegue automático de una aplicación Node.js/Express hacia Google Cloud Run, usando Workload Identity Federation para autenticación sin claves secretas.
 
----
-
-## 📋 Tabla de contenido
-
-- [Arquitectura](#arquitectura)
-- [Prerequisitos](#prerequisitos)
-- [Paso 1 — Configurar Google Cloud CLI](#paso-1--configurar-google-cloud-cli)
-- [Paso 2 — Habilitar APIs](#paso-2--habilitar-apis)
-- [Paso 3 — Crear Artifact Registry](#paso-3--crear-artifact-registry)
-- [Paso 4 — Crear Service Account y permisos](#paso-4--crear-service-account-y-permisos)
-- [Paso 5 — Configurar Workload Identity Federation](#paso-5--configurar-workload-identity-federation)
-- [Paso 6 — Secretos en GitHub](#paso-6--secretos-en-github)
-- [Paso 7 — Estructura del repositorio](#paso-7--estructura-del-repositorio)
-- [Paso 8 — Workflow de GitHub Actions](#paso-8--workflow-de-github-actions)
-- [Paso 9 — Verificar el despliegue](#paso-9--verificar-el-despliegue)
-- [Brechas de seguridad conocidas](#brechas-de-seguridad-conocidas)
 
 ---
 
-## Arquitectura
+## 1. 🏗️ Introducción y Arquitectura del Sistema
+
+Este proyecto implementa un flujo de integración y despliegue continuo (CI/CD) para una aplicación web desarrollada con Node.js y Express. El proceso utiliza GitHub Actions como pipeline principal para automatizar el análisis de código, la construcción y publicación de imágenes Docker y el despliegue de la aplicación en Google Cloud Run.
+
+Además, se configuró Jenkins como pipeline adicional, SonarQube Cloud para el análisis de calidad y seguridad del código, y Google Cloud Monitoring para visualizar métricas y generar alertas sobre el comportamiento de la aplicación en producción.
 
 ```
 git push (main)
@@ -30,232 +18,50 @@ git push (main)
 GitHub Actions (ubuntu-latest)
       │
       ├─ 1. Checkout código
-      ├─ 2. Auth → Google Cloud (Workload Identity OIDC)
-      ├─ 3. Login Docker → Artifact Registry
-      ├─ 4. docker build & push (taggeado con commit SHA)
-      └─ 5. gcloud run deploy → Cloud Run
-                                      │
-                                      ▼
-                              Servicio en vivo (HTTPS)
-```
+      ├─ 2. SonarQube Scan
+      ├─ 3. Auth → Google Cloud (Workload Identity OIDC)
+      ├─ 4. Login Docker → Artifact Registry
+      ├─ 5. docker build & push (taggeado con commit SHA)
+      └─ 6. gcloud run deploy → Cloud Run
+              │ ------------------------                        
+              ▼                         ▼
+    Google Cloud Monitoring      Servicio en vivo (HTTPS)
 
-**Stack:**
+
+GitHub
+      │
+      ▼
+Jenkins (Jenkinsfile)
+      │
+      ├─ Test Jenkins
+      ├─ Test Docker
+      └─ Test Google Cloud
+
+---
+
+## 2. Stack:
 - **Aplicación:** Node.js + Express
 - **Contenedor:** Docker
 - **Registro de imágenes:** Google Artifact Registry
 - **Plataforma:** Google Cloud Run (serverless)
-- **CI/CD:** GitHub Actions
-- **Autenticación:** Workload Identity Federation (sin claves JSON)
+- **CI/CD:** GitHub Actions + Jenkins
+- **Análisis de código:** SonarQube Cloud
+- **Monitoreo:** Google Cloud Monitoring
+- **Métricas:** SLIs de errores 5xx, latencia p95, disponibilidad e instancias
+- **Alertas:** Google Cloud Monitoring → notificaciones por correo
+- **Autenticación:** Workload Identity Federation (OIDC, sin claves JSON)
 
 ---
-
-## Prerequisitos
-
-- Cuenta de Google Cloud con proyecto activo
-- Cuenta de GitHub con repositorio creado
-- [Google Cloud CLI](https://cloud.google.com/sdk/docs/install) instalado
-- Docker instalado localmente (opcional, para pruebas locales)
-
----
-
-## Paso 1 — Configurar Google Cloud CLI
-
-Instala gcloud CLI desde https://cloud.google.com/sdk/docs/install y luego inicializa:
-
-```cmd
-gcloud init
-```
-
-Verifica que el proyecto correcto esté activo:
-
-```cmd
-gcloud config set project cicdtraining-498421
-gcloud config list
-```
-
----
-
-## Paso 2 — Habilitar APIs
-
-```cmd
-gcloud services enable run.googleapis.com artifactregistry.googleapis.com iam.googleapis.com iamcredentials.googleapis.com
-```
-
----
-
-## Paso 3 — Crear Artifact Registry
-
-Repositorio Docker donde se almacenarán las imágenes:
-
-```cmd
-gcloud artifacts repositories create mi-app --repository-format=docker --location=us-central1
-```
-
-Verifica que quedó creado:
-
-```cmd
-gcloud artifacts repositories list
-```
-
----
-
-## Paso 4 — Crear Service Account y permisos
-
-**Crear el Service Account:**
-
-```cmd
-gcloud iam service-accounts create github-actions-sa --display-name="GitHub Actions SA"
-```
-
-**Permiso para desplegar en Cloud Run:**
-
-```cmd
-gcloud projects add-iam-policy-binding cicdtraining-498421 --member="serviceAccount:github-actions-sa@cicdtraining-498421.iam.gserviceaccount.com" --role="roles/run.admin"
-```
-
-**Permiso para subir imágenes a Artifact Registry:**
-
-```cmd
-gcloud projects add-iam-policy-binding cicdtraining-498421 --member="serviceAccount:github-actions-sa@cicdtraining-498421.iam.gserviceaccount.com" --role="roles/artifactregistry.writer"
-```
-
-**Permiso para actuar como Service Account:**
-
-```cmd
-gcloud projects add-iam-policy-binding cicdtraining-498421 --member="serviceAccount:github-actions-sa@cicdtraining-498421.iam.gserviceaccount.com" --role="roles/iam.serviceAccountUser"
-```
-
----
-
-## Paso 5 — Configurar Workload Identity Federation
-
-Permite que GitHub Actions se autentique con Google Cloud sin necesidad de claves JSON.
-
-**Obtener el número del proyecto:**
-
-```cmd
-gcloud projects describe cicdtraining-498421 --format="value(projectNumber)"
-```
-
-**Crear el Identity Pool:**
-
-```cmd
-gcloud iam workload-identity-pools create "github-pool" --location="global" --display-name="GitHub Pool"
-```
-
-**Crear el Provider:**
-
-```cmd
-gcloud iam workload-identity-pools providers create-oidc "github-provider" --location="global" --workload-identity-pool="github-pool" --display-name="GitHub Provider" --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.repository_owner=assertion.repository_owner" --attribute-condition="assertion.repository_owner=='mafeopa'" --issuer-uri="https://token.actions.githubusercontent.com"
-```
-
-**Vincular el Service Account al pool:**
-
-```cmd
-gcloud iam service-accounts add-iam-policy-binding github-actions-sa@cicdtraining-498421.iam.gserviceaccount.com --role="roles/iam.workloadIdentityUser" --member="principalSet://iam.googleapis.com/projects/622078306811/locations/global/workloadIdentityPools/github-pool/attribute.repository_owner/mafeopa"
-```
-
-**Obtener el nombre completo del provider** (necesario como secreto en GitHub):
-
-```cmd
-gcloud iam workload-identity-pools providers describe github-provider --location="global" --workload-identity-pool="github-pool" --format="value(name)"
-```
-
-El valor será algo como:
-```
-projects/622078306811/locations/global/workloadIdentityPools/github-pool/providers/github-provider
-```
-
----
-
-## Paso 6 — Secretos en GitHub
-
-Ve a tu repositorio → ***Settings → Secrets and variables → Actions → New repository secret** y  agrega:
-
-| Nombre | Valor |
-|--------|-------|
-| `GCP_PROJECT_ID` | `my-demo-506722` |
-| `WIF_PROVIDER` | `projects/1011707551443/locations/global/workloadIdentityPools/github-pool/providers/github-provider` |
-| `WIF_SERVICE_ACCOUNT` | `github-actions-sa@my-demo-506722.iam.gserviceaccount.com` |
-
----
-
-## Paso 7 — Estructura del repositorio
-
-```
-📁 tu-repositorio/
-├── 📁 .github/
-│   └── 📁 workflows/
-│       └── 📄 deploy.yml
-├── 📄 app.js
-├── 📄 package.json
-└── 📄 Dockerfile
-```
-
-**app.js:**
-
-```javascript
-const express = require('express')
-const app = express()
-const PORT = process.env.PORT || 8080
-
-app.get('/', (req, res) => {
-  res.send('Hola desde Cloud Run 🚀')
-})
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor corriendo en puerto ${PORT}`)
-})
-```
-
-**package.json:**
-
-```json
-{
-  "name": "mi-app",
-  "version": "1.0.0",
-  "main": "app.js",
-  "scripts": {
-    "start": "node app.js"
-  },
-  "dependencies": {
-    "express": "^4.18.2"
-  }
-}
-```
-
-**Dockerfile:**
-
-```dockerfile
-FROM node:20-slim
-
-WORKDIR /app
-
-COPY package*.json ./
-
-RUN npm install --only=production
-
-COPY . .
-
-EXPOSE 8080
-
-CMD ["node", "app.js"]
-```
-
-> **Importante:** Cloud Run requiere que la app escuche en el puerto `8080` y en `0.0.0.0`, no solo en `localhost`.
-
----
-
-## Paso 8 — Workflow de GitHub Actions
-
-Archivo `.github/workflows/deploy.yml`:
-
+## 3. ⚙️ Pipeline de Integración y Despliegue Continuo (GitHub Actions)
+El pipeline se encuentra configurado en la ruta `.github/workflows/deploy.yml` y se ejecuta de manera automática ante cada evento de `push` a la rama principal.
+### Código de Configuración (`deploy.yml`)
 ```yaml
 name: Deploy to Cloud Run
 
 on:
   push:
     branches: [main]
+
 
 env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
@@ -268,34 +74,35 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write   # requerido para Workload Identity Federation
+      id-token: write
 
     steps:
       - name: Checkout código
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@7006c4492b2e0ee0f816d36501671557c97f5995
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: https://sonarcloud.io
 
       - name: Autenticar con Google Cloud
-        id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-          token_format: access_token
-
       - name: Configurar gcloud
         uses: google-github-actions/setup-gcloud@v2
-
-      - name: Login a Artifact Registry
-        uses: docker/login-action@v3
-        with:
-          registry: us-central1-docker.pkg.dev
-          username: oauth2accesstoken
-          password: ${{ steps.auth.outputs.access_token }}
+        
+      - name: Configurar Docker para Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev
 
       - name: Build y push imagen Docker
         run: |
-          docker build -t ${{ env.IMAGE }}:${{ github.sha }} .
-          docker push ${{ env.IMAGE }}:${{ github.sha }}
+          docker build -t $IMAGE:${{ github.sha }} .
+          docker push $IMAGE:${{ github.sha }}
 
       - name: Deploy a Cloud Run
         uses: google-github-actions/deploy-cloudrun@v2
@@ -304,59 +111,206 @@ jobs:
           region: ${{ env.REGION }}
           image: ${{ env.IMAGE }}:${{ github.sha }}
 ```
-
 ---
+## 4. ⚙️ Jenkins 
+Jenkins se configuró como un pipeline independiente para validar la ejecución de Jenkins, Docker y la disponibilidad de Google Cloud desde el servidor Jenkins.
+### Código de Configuración (`Jenkinsfile`)
+```Jenkinsfile
+pipeline {
+    agent any
 
-## Paso 9 — Verificar el despliegue
+    stages {
+        stage('Test Jenkins') {
+            steps {
+                echo 'Jenkins está ejecutando correctamente el pipeline'
+            }
+        }
 
-Haz push a `main` y ve a la pestaña **Actions** en GitHub para ver el pipeline en tiempo real.
+        stage('Test Docker') {
+            steps {
+                bat 'docker --version'
+            }
+        }
 
-Una vez verde, obtén la URL del servicio:
-
-```cmd
-gcloud run services describe mi-app --region=us-central1 --project=cicdtraining-498421 --format="value(status.url)"
+        stage('Test Google Cloud') {
+            steps {
+                bat 'gcloud --version'
+            }
+        }
+    }
+}
 ```
-
-Si recibes error `403`, habilita el acceso público:
-
-```cmd
-gcloud run services add-iam-policy-binding mi-app --region=us-central1 --project=cicdtraining-498421 --member="allUsers" --role="roles/run.invoker"
-```
-
-Abre la URL en el navegador y deberías ver:
-
-```
-Hola desde Cloud Run 🚀
-```
-
-Ver logs del servicio:
-
-```cmd
-gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=mi-app" --limit=20 --project=cicdtraining-498421 --format="value(textPayload)"
-```
-
 ---
+## 5. 📊 Evidencias de Ejecución y Funcionamiento
+### A. 🟢 Ejecución Exitosa del Pipeline en GitHub Actions
+El ultimo commit que se realizó fue "Integrate SonarQube Cloud" y en el modulo de Actions de github nos da como resultado exitoso. 
+<img width="931" height="731" alt="image" src="https://github.com/user-attachments/assets/568d0573-2e49-43c3-80b2-557c9b805982" />
 
-## Brechas de seguridad conocidas
+También es importante tener en cuenta que se implementaron 4 secretas en github incluyendo la de sonar. 
+<img width="661" height="300" alt="image" src="https://github.com/user-attachments/assets/204f5503-11d5-4e75-9780-14017cb3da21" />
 
-| # | Brecha | Riesgo | Solución recomendada |
-|---|--------|--------|----------------------|
-| 1 | Pool abierto a toda la cuenta GitHub | Cualquier repo puede usar las credenciales | Restringir a un repo específico con `assertion.repository=='mafeopa/cicdtraining'` |
-| 2 | Servicio público sin autenticación (`allUsers`) | Abuso de recursos y costos inesperados | Agregar rate limiting o usar Cloud Armor |
-| 3 | Service Account con `roles/run.admin` | Permisos excesivos sobre Cloud Run | Cambiar a `roles/run.developer` |
-| 4 | Sin escaneo de vulnerabilidades en la imagen | Imágenes con CVEs desplegadas en producción | Agregar `google-github-actions/scan-docker-image` al workflow |
-| 5 | Sin protección en rama `main` | Cualquier push va directo a producción | Habilitar branch protection con Pull Request obligatorio |
+### B. 🟢 Ejecución Exitosa de Jenkins
+Jenkins se configuró como un pipeline adicional para demostrar la ejecución automatizada de procesos de integración continua sobre el mismo repositorio de GitHub. A diferencia de GitHub Actions, que actualmente realiza el despliegue completo de la aplicación en Google Cloud Run, Jenkins se utiliza para validar la disponibilidad y correcta integración de las principales herramientas del entorno.
 
----
+* **Resultado:** Se evidencia que el resultado es exitoso. 
+<img width="1877" height="513" alt="image" src="https://github.com/user-attachments/assets/c855ee6d-b70c-4b0d-99a8-cf9d208ebfa5" />
+* **Consola:**
+```
+Lanzada por el usuario Edgar Andres Romero Otalora
+Obtained Jenkinsfile from git https://github.com/edgarrootalora/cicdtraining.git
+[Pipeline] Start of Pipeline
+[Pipeline] node
+Running on Jenkins  in C:\ProgramData\Jenkins\.jenkins\workspace\cicdtraining-cd
+[Pipeline] {
+[Pipeline] stage
+[Pipeline] { (Declarative: Checkout SCM)
+[Pipeline] checkout
+Selected Git installation does not exist. Using Default
+The recommended git tool is: NONE
+No credentials specified
+ > git.exe rev-parse --resolve-git-dir C:\ProgramData\Jenkins\.jenkins\workspace\cicdtraining-cd\.git # timeout=10
+Fetching changes from the remote Git repository
+ > git.exe config remote.origin.url https://github.com/edgarrootalora/cicdtraining.git # timeout=10
+Fetching upstream changes from https://github.com/edgarrootalora/cicdtraining.git
+ > git.exe --version # timeout=10
+ > git --version # 'git version 2.54.0.windows.1'
+ > git.exe fetch --tags --force --progress -- https://github.com/edgarrootalora/cicdtraining.git +refs/heads/*:refs/remotes/origin/* # timeout=10
+ > git.exe rev-parse "refs/remotes/origin/main^{commit}" # timeout=10
+Checking out Revision a3a24f26b9632c89906ecccce00882ad48a5ee4b (refs/remotes/origin/main)
+ > git.exe config core.sparsecheckout # timeout=10
+ > git.exe checkout -f a3a24f26b9632c89906ecccce00882ad48a5ee4b # timeout=10
+Commit message: "Integrate SonarQube Cloud"
+ > git.exe rev-list --no-walk 4839f9664f7f70b403a0e25cb88bc6aadc28c23d # timeout=10
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] withEnv
+[Pipeline] {
+[Pipeline] stage
+[Pipeline] { (Test Jenkins)
+[Pipeline] echo
+Jenkins está ejecutando correctamente el pipeline
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Test Docker)
+[Pipeline] bat
 
-## Referencias
+C:\ProgramData\Jenkins\.jenkins\workspace\cicdtraining-cd>docker --version 
+Docker version 29.7.2, build a7dcaa6
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] stage
+[Pipeline] { (Test Google Cloud)
+[Pipeline] bat
 
-- [Google Cloud Run Documentation](https://cloud.google.com/run/docs)
-- [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Workload Identity Federation](https://cloud.google.com/iam/docs/workload-identity-federation)
-- [google-github-actions/auth](https://github.com/google-github-actions/auth)
-- [google-github-actions/deploy-cloudrun](https://github.com/google-github-actions/deploy-cloudrun)
+C:\ProgramData\Jenkins\.jenkins\workspace\cicdtraining-cd>gcloud --version 
+Google Cloud SDK 582.0.0
+alpha 2026.08.21
+beta 2026.08.21
+bq 2.1.37
+core 2026.08.21
+gcloud-crc32c 1.0.0
+gsutil 5.37
+[Pipeline] }
+[Pipeline] // stage
+[Pipeline] }
+[Pipeline] // withEnv
+[Pipeline] }
+[Pipeline] // node
+[Pipeline] End of Pipeline
+Finished: SUCCESS
+```
 
----
+### C. 🟢 Implementación de SonarQube Cloud
+Se integró SonarQube Cloud al pipeline de GitHub Actions con el objetivo de analizar automáticamente la calidad y seguridad del código fuente cada vez que se realiza un push sobre la rama main.
+* **Ejecución:** La ejecución de sonar en el pipeline fue exitosa.
 
-*Universidad de Boyacá • 2026 • github.com/mafeopa*
+* **Resultados:** En las imágenes se ven los resultados arrojados. El análisis también generó recomendaciones relacionadas con seguridad, entre ellas el uso de versiones específicas para dependencias, ejecución de contenedores con usuario root, uso de scripts durante la instalación de paquetes y otras prácticas de seguridad.
+
+Estos resultados permiten evidenciar que SonarQube no solamente fue integrado al pipeline, sino que realizó un análisis real del código y proporcionó información para identificar posibles mejoras.
+
+<img width="1467" height="889" alt="image" src="https://github.com/user-attachments/assets/c644c9d7-02ac-489c-bafb-b626b2baa2e3" />
+
+<img width="1134" height="617" alt="image" src="https://github.com/user-attachments/assets/699bf4b4-84fe-4e71-b773-14d543ee4e38" />
+
+<img width="1689" height="831" alt="image" src="https://github.com/user-attachments/assets/ebcd6778-a982-44e6-a92f-83cc50117eb4" />
+
+
+### D. 🟢 SLIs
+Mediante el archivo dashboard.json se definió la estructura del dashboard utilizado para medir y visualizar los principales indicadores de nivel de servicio (SLI) de la aplicación.
+
+* **Panel general de los SLIs** En la imagen se pueden observar las 4 gráficas donde se analiza: La tasa de errores 5xx, la Latencia p95(ms), Disponibilidad (request 2xx vs total) y Concurrencia - Requests activos
+<img width="1692" height="794" alt="image" src="https://github.com/user-attachments/assets/c30732f5-1567-43f2-8b27-11c64aee8e7c" />
+
+* **Tasa de errores** mide la frecuencia con la que el servicio responde con errores internos del servidor (códigos HTTP 5xx). Permite identificar fallos en la aplicación y evaluar su confiabilidad.
+  <img width="760" height="565" alt="image" src="https://github.com/user-attachments/assets/f978756b-6b39-4a18-8c4d-21785089ee20" />
+
+* **Latencia** mide el tiempo de respuesta del 95% de las solicitudes. Permite identificar si la aplicación está respondiendo rápidamente y detectar posibles problemas de rendimiento.
+  <img width="758" height="560" alt="image" src="https://github.com/user-attachments/assets/ab9945fb-3ec6-4759-8715-bcc7a66a13b0" />
+  
+* **Disponibilidad** mide la proporción de solicitudes que reciben una respuesta exitosa (códigos HTTP 2xx) frente al total de solicitudes.
+<img width="756" height="558" alt="image" src="https://github.com/user-attachments/assets/acc535a1-56a4-4a18-be4f-bd3c4101a9f9" />
+
+* **Concurrencia** mide la cantidad de instancias de la aplicación que están atendiendo solicitudes simultáneamente. Permite conocer el nivel de carga y cómo escala el servicio ante el tráfico.
+<img width="755" height="563" alt="image" src="https://github.com/user-attachments/assets/09a9e95a-c44d-4514-9816-558900c701f8" />
+
+### E. 🟢 Alertas
+Se implementaron 3 alertas para indicar cuando se presenten problemas de Tasa de errores, latencia y disponibilidad en google cloud. 
+
+<img width="1149" height="291" alt="image" src="https://github.com/user-attachments/assets/22f07246-23a5-4948-a723-4c8f45ef47ed" />
+
+También se implementaron dos canales de notificación vía correo electrónico, configurados para recibir las alertas generadas por Google Cloud Monitoring cuando alguna de las métricas definidas supera los umbrales establecidos. De esta manera, se facilita la detección oportuna de posibles problemas en el funcionamiento y rendimiento de la aplicación.
+
+### F. Prueba de carga con K6
+Se realizo una prueba de carga con K6 que simula hasta 200 usuarios concurrentes accediendo a la aplicación Cloud Run. Esto mediante el archivo load-test.js que se encuentra en el directorio K6. 
+
+#### Umbrales definidos
+
+Para evaluar el comportamiento de la aplicación se establecieron los siguientes SLO:
+
+- **Tasa de errores:** menor al 0.5%.
+- **Latencia p95:** menor a 500 ms.
+- **Tasa de errores personalizada:** menor al 0.5%.
+
+Estos umbrales permiten determinar automáticamente si la aplicación cumple con los niveles de servicio esperados durante la prueba de carga.
+
+Al ejecutarlo muestra el siguiente resultado: 
+
+<img width="311" height="245" alt="image" src="https://github.com/user-attachments/assets/0f96d36e-42fd-447d-90c1-50d042963c9b" />
+
+La prueba generó tráfico normal, tráfico lento y errores simulados. La tasa de errores se mantuvo dentro del umbral establecido, mientras que la latencia superó el límite definido y la disponibilidad alcanzó un 95.2%.
+
+### G. Emails resultado de la prueba de carga
+Después de la prueba de cargar recibimos correos electrónicos relacionados a las alertas de SLIs. 
+
+* **Alerta de tasa de error disparada** A continuación la alerta de tasa de error
+<img width="1393" height="715" alt="image" src="https://github.com/user-attachments/assets/fa3c5d5c-7259-48bb-b95d-2dfade31362f" />
+
+* **Alerta de tasa de error recuperada**
+<img width="1099" height="689" alt="image" src="https://github.com/user-attachments/assets/b0a1ad32-78d9-4b55-ba5d-08910b3feebf" />
+
+* **Alerta de latencia disparada**
+<img width="1404" height="701" alt="image" src="https://github.com/user-attachments/assets/a9bf6773-a9f0-4134-8d01-799bb207e13f" />
+
+* **Alerta de latencia recuperada**
+<img width="1167" height="634" alt="image" src="https://github.com/user-attachments/assets/48aee159-63e9-42fc-8251-e0c49f61bf83" />
+
+* **Alerta de disponibilidad disparada**
+<img width="1049" height="759" alt="image" src="https://github.com/user-attachments/assets/f3dc3b3b-f067-4409-8273-d4907d1f11c3" />
+
+* **Alerta de disponibilidad recuperada**
+<img width="1061" height="744" alt="image" src="https://github.com/user-attachments/assets/ecaa9009-6663-4a3b-83fc-7ede62473729" />
+
+## 6. 📝 Conclusiones
+
+La implementación permitió construir un flujo CI/CD para una aplicación Node.js/Express utilizando GitHub Actions como pipeline principal de despliegue. Se integró SonarQube Cloud para el análisis de calidad y seguridad del código y Jenkins como pipeline adicional para validar la integración de las herramientas utilizadas.
+
+La aplicación fue contenerizada mediante Docker, publicada en Google Artifact Registry y desplegada en Google Cloud Run utilizando Workload Identity Federation, evitando el uso de claves JSON.
+
+Para el monitoreo se utilizaron las capacidades de Google Cloud Monitoring, mediante la definición de SLIs relacionados con errores, latencia, disponibilidad y concurrencia. Adicionalmente, se configuraron alertas mediante correo electrónico y se realizó una prueba de carga con K6 para evaluar el comportamiento de la aplicación bajo diferentes niveles de tráfico.
+
+Los resultados de la prueba permitieron comprobar el funcionamiento del sistema de monitoreo, incluyendo la generación y recuperación de alertas cuando las métricas superaron los umbrales establecidos.
+
+
+
+
